@@ -13,7 +13,7 @@ Character classes are handled with a handrolled bitmap specifically for UTF-8 co
 To do list:
 1. Implement caching and look for other optimisations.
 2. Benchmark against the standard library.
-3. Benchmark the bitmap against the standard library bitset and unordered map
+3. Benchmark the bitmap against the standard library bitset and unordered map (what would be a fair task?)
 
 
 
