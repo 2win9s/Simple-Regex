@@ -2,7 +2,7 @@
 
 Inspired by the [Russell Cox article on regex engines](https://swtch.com/~rsc/regexp/regexp1.html)
 
-A lightweight regex engine that supports ()[]*?+. and \ for escape, no backreferences.
+A lightweight (though a lot longer than the articles 400 line C code) regex engine that supports ()[]*?+. and \ for escape.
 Works with 7 bit ASCII and UTF-8 encodings all in a single header file.
 
 The engine uses Thompson's algorithm for the nfa.
