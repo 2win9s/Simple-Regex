@@ -10,8 +10,10 @@ Compilation of the regex is in 3 passes (to make it easier and clearer), tokenis
 
 Character classes are handled with a handrolled bitmap specifically for UTF-8 code points (though it is optimised for ascii).
 
-To do list implement caching and look for other optimisations.
-Also benchmark against the standard library.
+To do list:
+1. Implement caching and look for other optimisations.
+2. Benchmark against the standard library.
+3. Benchmark the bitmap against the standard library bitset and unordered map
 
 
 
