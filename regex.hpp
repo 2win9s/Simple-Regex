@@ -1533,9 +1533,7 @@ struct nfa_vm {
     cur.reserve(prog.size());
     nxt.reserve(prog.size());
     bool match = false;
-    if constexpr (!Unanchored) {
-      new_thread(cur, thread(&prog[0], save_points), -1);
-    }
+    new_thread(cur, thread(&prog[0], save_points), -1);
     for (uint32_t i = 0; i < str.size(); ++i) {
       gen_id = i;
       if constexpr (Unanchored) {
