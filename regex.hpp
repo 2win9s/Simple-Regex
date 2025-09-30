@@ -1534,30 +1534,30 @@ struct nfa_vm {
     nxt.reserve(prog.size());
     bool match = false;
     new_thread(cur, thread(&prog[0], save_points), -1);
-    for (uint32_t i = 0; i < str.size(); ++i) {
+    for (uint32_t i = 0; i < str.size();) {
       gen_id = i;
       if constexpr (Unanchored) {
         new_thread(cur, thread(&prog[0], save_points), i - 1);
       }
+      uint32_t i_c = i;  // temporary to avoid change in i
       for (uint32_t j = 0; j < cur.size(); ++j) {
         auto& op = *cur[j].ops;
         uint32_t utf8;
-        uint32_t i_c = i;
         switch (op.opt) {
           default:
             continue;
           case op::optype::CHAR:
+            i_c = i;
             utf8 = get_utf8_n_inc(str, i_c);
             if (utf8 != op.data) {
               continue;
             }
-            i = i_c;
             new_thread(nxt, thread(op.lb, std::move(cur[j].m_loc)), i);
             continue;
           case op::optype::CLASS:
+            i_c = i;
             utf8 = get_utf8_n_inc(str, i_c);
             if (classes[op.data].test_rev4byte(utf8)) {
-              i = i_c;
               new_thread(nxt, thread(op.lb, std::move(cur[j].m_loc)), i);
             }
             continue;
@@ -1577,6 +1577,7 @@ struct nfa_vm {
           return match;
         }
       }
+      i += utf8_bitmap::utf_bytes(str[i]);
     }
     for (uint32_t j = 0; j < cur.size(); ++j) {
       auto& op = *cur[j].ops;
