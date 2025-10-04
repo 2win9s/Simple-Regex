@@ -162,6 +162,119 @@ struct bitmap {
   byte bits[8 * (int)((bitsize + 63) / 64)] = {0};
 };
 
+struct bitvector {
+  inline bool test(uint32_t idx) const {
+    return test_bit(data[idx >> 3], idx & 7);
+  }
+  inline void set(uint32_t idx) {
+    data[idx >> 3] = set_bit(data[idx >> 3], idx & 7);
+  }
+  inline void reset(uint32_t idx) {
+    data[idx >> 3] = reset_bit(data[idx >> 3], idx & 7);
+  }
+  inline void flip(uint32_t idx) {
+    data[idx >> 3] = flip_bit(data[idx >> 3], idx & 7);
+  }
+  inline uint32_t count() const {
+    if (data.size() == 0) {
+      return 0;
+    }
+    using namespace std;  // ADL for popcount
+    uint64_t temp;
+    std::memcpy(&temp, &data[0], 8);
+    uint32_t retv = popcount(temp);
+    for (uint32_t i = 1; i < data.size(); ++i) {
+      std::memcpy(&temp, &data[i], sizeof(uint64_t));
+      retv += popcount(temp);
+    }
+    return retv;
+  }
+  inline bitvector& operator^=(const bitvector& other) {
+    uint64_t temp_a;
+    uint64_t temp_b;
+    for (uint32_t i = 0; i < data.size(); ++i) {
+      std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
+      std::memcpy(&temp_b, &other.data[i], sizeof(uint64_t));
+      temp_a ^= temp_b;
+      std::memcpy(&data[i], &temp_a, sizeof(uint64_t));
+    }
+    return *this;
+  }
+  inline bitvector& operator&=(const bitvector& other) {
+    uint64_t temp_a;
+    uint64_t temp_b;
+    for (uint32_t i = 0; i < data.size(); ++i) {
+      std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
+      std::memcpy(&temp_b, &other.data[i], sizeof(uint64_t));
+      temp_a &= temp_b;
+      std::memcpy(&data[i], &temp_a, sizeof(uint64_t));
+    }
+    return *this;
+  }
+  inline bitvector& operator|=(const bitvector& other) {
+    uint64_t temp_a;
+    uint64_t temp_b;
+    for (uint32_t i = 0; i < data.size(); ++i) {
+      std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
+      std::memcpy(&temp_b, &other.data[i], sizeof(uint64_t));
+      temp_a |= temp_b;
+      std::memcpy(&data[i], &temp_a, sizeof(uint64_t));
+    }
+    return *this;
+  }
+  inline bitvector& operator~() {
+    uint64_t temp_a;
+    for (uint32_t i = 0; i < data.size(); ++i) {
+      std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
+      temp_a = ~temp_a;
+      std::memcpy(&data[i], &temp_a, sizeof(uint64_t));
+    }
+    return *this;
+  }
+  inline friend bitvector operator^(bitvector lhs, const bitvector& rhs) {
+    return lhs ^= rhs;
+  }
+  inline friend bitvector operator&(bitvector lhs, const bitvector& rhs) {
+    return lhs &= rhs;
+  }
+  inline friend bitvector operator|(bitvector lhs, const bitvector& rhs) {
+    return lhs |= rhs;
+  }
+  inline void clear() {
+    std::memset(&data[0], 0, data.size() * sizeof(uint64_t));
+  }
+
+  friend std::ostream& operator<<(std::ostream& stream, const bitvector& map) {
+    for (auto i = 0; i < 8 * sizeof(map); ++i) {
+      if (map.test(i)) {
+        stream << '1';
+      } else {
+        stream << '0';
+      }
+    }
+    return stream;
+  }
+
+  // size in bits
+  uint32_t size() { return static_cast<uint32_t>(data.size()) << 3; }
+  // capacity in bits
+  uint32_t capacity() { return static_cast<uint32_t>(data.capacity()) << 3; }
+
+  void resize(uint32_t size) { data.resize(size << 3); }
+
+  void reserve(uint32_t size) { data.reserve(size << 3); }
+
+  bitvector(uint32_t size) : data(size >> 3) {}
+
+  bitvector(const bitvector&) = default;
+  bitvector(bitvector&&) = default;
+  bitvector& operator=(const bitvector&) = default;
+  bitvector& operator=(bitvector&&) = default;
+
+ protected:
+  std::vector<uint64_t> data;
+};
+
 void error_invalid_utf8(const char* func_name) {
   std::string err_msg = "ERROR: Invalid UTF-8 passed to:";
   err_msg += func_name;
@@ -849,6 +962,19 @@ struct utf8_bitmap {
   bitmap<4096>** others = nullptr;
 };
 
+template <typename T>
+struct utf8_map {
+  
+  
+  protected:
+  T* ascii[256];
+  T* (*latin)[2048];            // pointer to 2048 pointer array
+  T* (*(*bmp)[2048])[32];       // pointer to 32 array of array pointers to 2048
+                                // pointer array
+  T* (*(*others)[2048])[1024];  // pointer to 1024 array of array pointers to
+                                // 2048 pointer array
+};
+
 // idx is left at end of code point (not past the end)
 uint32_t get_utf8_n_inc(const std::string& str, uint32_t& idx) {
   uint32_t utf8_char = static_cast<byte>(str[idx]);
@@ -1042,6 +1168,7 @@ struct nfa_vm {
     };
     op(uint32_t p, uint32_t dat, op* nxt, op* branch = nullptr)
         : opt(p), data(dat), gen(-1), lb(nxt), rb(branch) {}
+    op() : opt('c'), data(0), gen(-1), lb(nullptr), rb(nullptr) {}
     uint32_t opt;
     uint32_t data;
     int64_t gen = -1;
@@ -1050,24 +1177,30 @@ struct nfa_vm {
   };
   // fragment of full nfa, tracks an op and a list of dangling connections
   struct nfa_frag {
+    nfa_frag() : sp(nullptr), pad(0), start(nullptr), end(nullptr) {}
     nfa_frag(op* spos, op** st, op** ed) : sp(spos), start(st), end(ed) {}
     nfa_frag(op& spos) : sp(&spos), start(&(spos.lb)), end(&(spos.lb)) {}
-    nfa_frag() : sp(nullptr), pad(0), start(nullptr), end(nullptr) {}
+
+    op** start;
+    op** end;
     op* sp;
     // pad it out to a neat 32 bytes (should benchmark to see if it matters)
    private:
     int64_t pad = 0;
-
-   public:
-    op** start;
-    op** end;
   };
 
   struct thread {
+    thread() : ops(nullptr), m_loc(0) {}
     thread(op* o, uint32_t n = 0) : ops(o), m_loc(n) {}
     thread(op* o, std::vector<uint32_t>&& relay) : ops(o), m_loc(relay) {}
     op* ops;
     std::vector<uint32_t> m_loc;
+  };
+
+  struct cache_element {
+    utf8_bitmap filter;
+    utf8_map<cache_element*> next_state;
+    std::vector<op> ops;
   };
 
  protected:
@@ -1622,15 +1755,39 @@ struct nfa_vm {
     return matches;
   }
 
+  void free_memory(bool free_prog_vec = false) {
+    if (free_prog_vec) {
+      prog = std::move(std::vector<op>(0));
+      classes = std::move(std::vector<utf8_bitmap>(0));
+      save_points = 0;  // for consistency sake
+    }
+    // matching will still work but might have a bit of warmup
+    f_stack = std::move(std::vector<nfa_frag>(0));
+    cur = std::move(std::vector<thread>(0));
+    nxt = std::move(std::vector<thread>(0));
+    matches = std::move(std::vector<std::vector<uint32_t>>(0));
+  }
+
  protected:
-  uint32_t save_points = 0;
-  std::vector<nfa_frag> f_stack;
-  std::vector<std::vector<uint32_t>> matches;
+  // nfa related
   std::vector<op> prog;
   std::vector<utf8_bitmap> classes;
+  uint32_t save_points = 0;
+  // compilation only
+  std::vector<nfa_frag> f_stack;
+  // matching related
   uint64_t gen_id = 0;
   std::vector<thread> cur{};
   std::vector<thread> nxt{};
+  std::vector<std::vector<uint32_t>> matches;
 };
 
 }  // namespace simple_regex
+
+// program length times number of saves
+// cache and determine rejection
+// each other be a pointer to list
+
+// hash on instructions
+
+// what was the shit about sparse sets?
