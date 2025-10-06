@@ -11,6 +11,7 @@ Compilation of the regex is in 3 passes (to make it easier and clearer), tokenis
 Character classes are handled with a handrolled bitmap specifically for UTF-8 code points.
 
 testing.cpp output():
+
 '''
 Regex: f.*l 
 Shakespeare quote 1 test
