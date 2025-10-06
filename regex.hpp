@@ -3,15 +3,16 @@
 // https://swtch.com/~rsc/regexp/regexp2.html
 
 #pragma once
-// C++ 20 needed for attributes (optional std::popcount)
+// C++ 20 needed for attributes (optional: std::popcount, std::countl_zero)
 
-#include <bit>        // for std::popcount    // requires C++ 20
+#include <bit>  // for std::popcount and std::countl_zero   // requires C++ 20
 #include <cstdint>    // for fixed width types
 #include <cstring>    // for std::memcpy (type punning)
 #include <iostream>   // for overloading << and for cout of course
+#include <map>        // probably a bst? no point in handrolling one
 #include <stdexcept>  // error handling
 #include <string>     // for c++ strings
-#include <vector>     // for vector
+#include <vector>     // for vector the GOAT of STL
 
 namespace simple_regex {
 using byte = unsigned char;
@@ -28,6 +29,46 @@ inline byte reset_bit(byte bits, byte idx) { return bits & (~(1 << idx)); }
 // (idx start from least significant at 0)
 inline byte flip_bit(byte bits, byte idx) { return bits ^ (1 << idx); }
 
+/*
+For abusing ADL in case std::countl_zero is not available
+*/
+template <typename... Sink>
+inline uint32_t countl_zero(uint64_t n) {
+  static_assert(sizeof(double) == 8,
+                "error coutl_zero requires doubles to be 8 bytes, also little "
+                "endian is assumed");
+  double x;
+  double y;
+  uint32_t bits[2];
+  uint64_t bitrep;
+  uint64_t bitrep2;
+  std::memcpy(bits, &n, sizeof(uint64_t));
+  x = bits[1];
+  std::memcpy(&bitrep, &x, sizeof(double));
+  bitrep = bitrep >> 52;
+  bitrep += 2 * (bits[1] > 0);
+  bitrep = bitrep & 31;
+  y = bits[0];
+  std::memcpy(&bitrep2, &y, sizeof(double));
+  bitrep2 = bitrep2 >> 52;
+  bitrep2 += 2 * (bits[0] > 0);
+  bitrep2 = bitrep2 & 31;
+  return 64 - bitrep - bitrep2 * (bits[1] == 0);
+}
+template <typename... Sink>
+inline uint32_t countl_zero(uint32_t n) {
+  static_assert(sizeof(double) == 8,
+                "error coutl_zero requires doubles to be 8 bytes, also little "
+                "endian is assumed");
+  double x;
+  uint64_t bitrep;
+  x = n;
+  std::memcpy(&bitrep, &x, sizeof(double));
+  bitrep = bitrep >> 52;
+  bitrep += 2 * (n > 0);
+  bitrep = bitrep & 31;
+  return 32 - bitrep;
+}
 /*
 For abusing ADL in case std::popcount is unavailable
 Brian Kernighan's Algorithm which
@@ -120,6 +161,20 @@ struct bitmap {
   inline friend bitmap operator|(bitmap lhs, const bitmap& rhs) {
     return lhs |= rhs;
   }
+
+  inline bool operator==(const bitmap& other) {
+    uint64_t temp_a;
+    uint64_t temp_b;
+    for (uint32_t i = 0; i < sizeof(bits); i += 8) {
+      std::memcpy(&temp_a, &bits[i], 8);
+      std::memcpy(&temp_b, &other.bits[i], 8);
+      if (temp_a != temp_b) {
+        return false;
+      }
+    }
+    return true;
+  }
+  inline bool operator!=(const bitmap& other) { return !(*this == (other)); }
   inline void clear() { std::memset(bits, 0, sizeof(bits)); }
   inline byte* data() { return bits; }
   inline const byte* data() const { return bits; }
@@ -159,7 +214,7 @@ struct bitmap {
   }
 
  protected:
-  byte bits[8 * (int)((bitsize + 63) / 64)] = {0};
+  byte bits[8 * (uint32_t)((bitsize + 63) / 64)] = {0};
 };
 
 struct bitvector {
@@ -183,7 +238,7 @@ struct bitvector {
     uint64_t temp;
     std::memcpy(&temp, &data[0], 8);
     uint32_t retv = popcount(temp);
-    for (uint32_t i = 1; i < data.size(); ++i) {
+    for (uint32_t i = 1; i < data.size(); i += 8) {
       std::memcpy(&temp, &data[i], sizeof(uint64_t));
       retv += popcount(temp);
     }
@@ -192,7 +247,9 @@ struct bitvector {
   inline bitvector& operator^=(const bitvector& other) {
     uint64_t temp_a;
     uint64_t temp_b;
-    for (uint32_t i = 0; i < data.size(); ++i) {
+    uint32_t ms =
+        (data.size() < other.data.size()) ? data.size() : other.data.size();
+    for (uint32_t i = 0; i < ms; i += 8) {
       std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
       std::memcpy(&temp_b, &other.data[i], sizeof(uint64_t));
       temp_a ^= temp_b;
@@ -203,7 +260,9 @@ struct bitvector {
   inline bitvector& operator&=(const bitvector& other) {
     uint64_t temp_a;
     uint64_t temp_b;
-    for (uint32_t i = 0; i < data.size(); ++i) {
+    uint32_t ms =
+        (data.size() < other.data.size()) ? data.size() : other.data.size();
+    for (uint32_t i = 0; i < ms; i += 8) {
       std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
       std::memcpy(&temp_b, &other.data[i], sizeof(uint64_t));
       temp_a &= temp_b;
@@ -214,7 +273,9 @@ struct bitvector {
   inline bitvector& operator|=(const bitvector& other) {
     uint64_t temp_a;
     uint64_t temp_b;
-    for (uint32_t i = 0; i < data.size(); ++i) {
+    uint32_t ms =
+        (data.size() < other.data.size()) ? data.size() : other.data.size();
+    for (uint32_t i = 0; i < ms; i += 8) {
       std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
       std::memcpy(&temp_b, &other.data[i], sizeof(uint64_t));
       temp_a |= temp_b;
@@ -224,7 +285,7 @@ struct bitvector {
   }
   inline bitvector& operator~() {
     uint64_t temp_a;
-    for (uint32_t i = 0; i < data.size(); ++i) {
+    for (uint32_t i = 0; i < data.size(); i += 8) {
       std::memcpy(&temp_a, &data[i], sizeof(uint64_t));
       temp_a = ~temp_a;
       std::memcpy(&data[i], &temp_a, sizeof(uint64_t));
@@ -240,12 +301,46 @@ struct bitvector {
   inline friend bitvector operator|(bitvector lhs, const bitvector& rhs) {
     return lhs |= rhs;
   }
-  inline void clear() {
-    std::memset(&data[0], 0, data.size() * sizeof(uint64_t));
+  inline bool operator==(const bitvector& other) {
+    if (data.size() != other.data.size()) {
+      return false;
+    }
+    uint64_t temp_a;
+    uint64_t temp_b;
+    for (uint32_t i = 0; i < data.size(); i += 8) {
+      std::memcpy(&temp_a, &data[i], 8);
+      std::memcpy(&temp_b, &other.data[i], 8);
+      if (temp_a != temp_b) {
+        return false;
+        break;
+      }
+    }
+    return true;
   }
+  inline bool operator!=(const bitvector& other) { return !(*this == (other)); }
+  inline friend bool comp(const bitvector& lhs, const bitvector& rhs) {
+    if (lhs.data.size() <= rhs.data.size()) {
+      if (lhs.data.size() < rhs.data.size()) {
+        return true;
+      }
+      uint64_t temp_a;
+      uint64_t temp_b;
+      for (int64_t i = lhs.data.size() - 8; i >= 0; i -= 8) {
+        std::memcpy(&temp_a, &lhs.data[i], 8);
+        std::memcpy(&temp_b, &rhs.data[i], 8);
+        if (temp_a < temp_b) {
+          return true;
+        }
+      }
+      return false;
+    } else {
+      return false;
+    }
+  }
+  inline void clear() { std::memset(&data[0], 0, data.size() * sizeof(byte)); }
 
   friend std::ostream& operator<<(std::ostream& stream, const bitvector& map) {
-    for (auto i = 0; i < 8 * sizeof(map); ++i) {
+    for (auto i = 0; i < 8 * map.data.size(); ++i) {
       if (map.test(i)) {
         stream << '1';
       } else {
@@ -256,23 +351,128 @@ struct bitvector {
   }
 
   // size in bits
-  uint32_t size() { return static_cast<uint32_t>(data.size()) << 3; }
+  uint32_t size() { return static_cast<uint32_t>(data.size()) * 8; }
   // capacity in bits
-  uint32_t capacity() { return static_cast<uint32_t>(data.capacity()) << 3; }
+  uint32_t capacity() { return static_cast<uint32_t>(data.capacity()) * 8; }
 
-  void resize(uint32_t size) { data.resize(size << 3); }
+  void resize(uint32_t size) {
+    data.resize((8 * (uint32_t)((size + 63) / 64)), 0);
+  }
 
-  void reserve(uint32_t size) { data.reserve(size << 3); }
-
-  bitvector(uint32_t size) : data(size >> 3) {}
+  void reserve(uint32_t size) {
+    data.reserve(8 * (uint32_t)((size + 63) / 64));
+  }
+  bitvector() = default;
+  bitvector(uint32_t size) : data(8 * (uint32_t)((size + 63) / 64), 0) {}
 
   bitvector(const bitvector&) = default;
   bitvector(bitvector&&) = default;
   bitvector& operator=(const bitvector&) = default;
   bitvector& operator=(bitvector&&) = default;
 
- protected:
-  std::vector<uint64_t> data;
+  // protected:
+  std::vector<byte> data;
+};
+
+struct sparse_set {
+  inline uint32_t operator[](uint32_t idx) const { return dense[idx]; }
+  inline uint32_t size() const { return dense.size(); }
+  inline void insert(uint32_t i) {
+    sparse[i] = dense.size();
+    dense.emplace_back(i);
+  }
+  inline bool test(uint32_t i) const {
+    if ((sparse[i] < dense.size())) {
+      if (dense[sparse[i]] == i) {
+        return true;
+      }
+    }
+    return false;
+  }
+  inline void test_insert(uint32_t i) {
+    if (test(i)) {
+      return;
+    }
+    sparse[i] = dense.size();
+    dense.emplace_back(i);
+  }
+  inline void remove(uint32_t i) {
+    if (test(i)) {
+      dense[sparse[i]] = dense.back();
+      sparse[dense.back()] = sparse[i];
+      dense.pop_back();
+    } else {
+      throw std::invalid_argument(
+          "Error invalid argument to simple_regex::sparse_set::remove, element "
+          "not in set");
+    }
+  }
+  inline void set_range(uint32_t r) {
+    if (r > dense.size()) {
+      sparse.resize(r);
+    } else {
+      throw std::invalid_argument(
+          "Error invalid argument to simple_regex::sparse_set::set_range, new "
+          "range is less than cardinality of set");
+    }
+  }
+  inline void clear() { dense.resize(0); }
+  inline void shrink_to_fit() { dense.shrink_to_fit(); }
+  sparse_set() : dense(), sparse() {}
+  sparse_set(uint32_t size) : dense(size), sparse(size) {}
+  std::vector<uint32_t> dense;
+  std::vector<uint32_t> sparse;
+};
+
+// sparse set sacrificing constant(probably) clear for comparison
+// or maybe iterate and construct bitset on the fly when you need it?
+struct hybrid_set {
+  inline uint32_t operator[](uint32_t idx) const { return sparse[idx]; }
+  inline uint32_t size() const { return sparse.size(); }
+  inline void insert(uint32_t i) {
+    sparse.insert(i);
+    bitset.set(i);
+  }
+  inline void test_insert(uint32_t i) {
+    sparse.test_insert(i);
+    bitset.set(i);
+  }
+  inline bool test(uint32_t i) const { return bitset.test(i); }
+  inline void remove(uint32_t i) {
+    bitset.reset(i);  // from a safety perspective maybe a bounds check but...
+    sparse.remove(i);
+  }
+  inline void set_range(uint32_t size) {
+    sparse.set_range(size);
+    bitset.resize(size);
+  }
+  inline void clear() {
+    sparse.clear();
+    bitset.clear();
+  }
+  inline bool operator==(const hybrid_set& other) {
+    if (sparse.size() != other.sparse.size()) {
+      return false;
+    }
+    return (bitset == other.bitset);
+  }
+  inline bool operator!=(const hybrid_set& other) {
+    return !(*this == (other));
+  }
+  hybrid_set() : sparse(), bitset() {}
+  hybrid_set(uint32_t size) : sparse(size), bitset(size) {}
+  hybrid_set(const hybrid_set&) = default;
+  hybrid_set(hybrid_set&&) = default;
+  hybrid_set& operator=(const hybrid_set&) = default;
+  hybrid_set& operator=(hybrid_set&&) = default;
+  sparse_set sparse;
+  bitvector bitset;
+};
+// for use with std::map
+struct hybrid_set_comp {
+  bool operator()(const hybrid_set& a, const hybrid_set& b) const {
+    return comp(a.bitset, b.bitset);
+  }
 };
 
 void error_invalid_utf8(const char* func_name) {
@@ -295,75 +495,81 @@ char peek_next(const char* s, uint32_t st, uint32_t sz) {
   return 0;
 }
 
+// given start byte how many bytes in this utf8 encoded code point
+inline static byte utf_bytes(byte start_byte) {
+  // optimise for ASCII
+  if (start_byte < 192) [[likely]] {
+    return 1;  // if binary doesn't start with 110 not multi byte utf8 i.e.
+               // < 128+64
+  } else {
+    return 4 - (start_byte < 224) - (start_byte < 240);
+  }
+}
+
+inline static uint32_t utf_4byte_h(byte a, byte b, byte c, byte d) {
+  uint32_t ret = (d & 0b00111111);
+  ret += static_cast<uint32_t>(c & 0b00111111) << 6;
+  ret += static_cast<uint32_t>(b & 0b00111111) << 12;
+  ret += static_cast<uint32_t>(a & 0b00000111) << 18;
+  return ret;
+}
+// extract the 16 unique bits of a 3 byte code point
+// i.e. a perfect hash for 3 byte UTF8 code points
+inline static uint16_t utf_3byte_h(byte a, byte b, byte c) {
+  uint16_t ret = (c & 0b00111111);
+  ret += static_cast<uint16_t>(b & 0b00111111) << 6;
+  ret += static_cast<uint16_t>(a & 0b00001111) << 12;
+  return ret;
+}
+// extract the 11 unique bits of a 2 byte code point
+// i.e. a perfect hash for 2 byte UTF8 code points
+inline static uint16_t utf_2byte_h(byte a, byte b) {
+  uint16_t ret = (b & 0b00111111);
+  ret += static_cast<uint16_t>(a & 0b00011111) << 6;
+  return ret;
+}
+
+inline static uint32_t pack_4byte(byte a, byte b = 0, byte c = 0, byte d = 0) {
+  uint32_t ret = d;
+  ret += static_cast<uint32_t>(c) << 8;
+  ret += static_cast<uint32_t>(b) << 16;
+  ret += static_cast<uint32_t>(a) << 24;
+  return ret;
+}
+inline static uint32_t pack_rev4byte(byte a, byte b = 0, byte c = 0,
+                                     byte d = 0) {
+  uint32_t ret = a;
+  ret += static_cast<uint32_t>(b) << 8;
+  ret += static_cast<uint32_t>(c) << 16;
+  ret += static_cast<uint32_t>(d) << 24;
+  return ret;
+}
+
 // not quite a complete bitmap
 // performance is linear for the 4byte codes, don't care about them
 struct utf8_bitmap {
-  // given start byte how many bytes in this utf8 encoded code point
-  inline static byte utf_bytes(byte start_byte) {
-    // optimise for ASCII
-    if (start_byte < 192) [[likely]] {
-      return 1;  // if binary doesn't start with 110 not multi byte utf8 i.e.
-                 // < 128+64
-    } else {
-      return 4 - (start_byte < 224) - (start_byte < 240);
-    }
-  }
-  // extract the 16 unique bits of a 3 byte code point
-  // i.e. a perfect hash for 3 byte UTF8 code points
-  inline static uint16_t utf_3byte_h(byte a, byte b, byte c) {
-    uint16_t ret = (c & 0b00111111);
-    ret += static_cast<uint16_t>(b & 0b00111111) << 6;
-    ret += static_cast<uint16_t>(a & 0b00001111) << 12;
-    return ret;
-  }
-  // extract the 11 unique bits of a 2 byte code point
-  // i.e. a perfect hash for 2 byte UTF8 code points
-  inline static uint16_t utf_2byte_h(byte a, byte b) {
-    uint16_t ret = (b & 0b00111111);
-    ret += static_cast<uint16_t>(a & 0b00011111) << 6;
-    return ret;
-  }
-
-  inline static uint32_t pack_4byte(byte a, byte b = 0, byte c = 0,
-                                    byte d = 0) {
-    uint32_t ret = d;
-    ret += static_cast<uint32_t>(c) << 8;
-    ret += static_cast<uint32_t>(b) << 16;
-    ret += static_cast<uint32_t>(a) << 24;
-    return ret;
-  }
-  inline static uint32_t pack_rev4byte(byte a, byte b = 0, byte c = 0,
-                                       byte d = 0) {
-    uint32_t ret = a;
-    ret += static_cast<uint32_t>(b) << 8;
-    ret += static_cast<uint32_t>(c) << 16;
-    ret += static_cast<uint32_t>(d) << 24;
-    return ret;
-  }
-
   inline bool test(byte a) const { return ascii.test(a); }
   inline bool test(byte a, byte b) const {
-    if (latin == nullptr) {
-      return false;
+    if (latin) {
+      return (*latin).test(utf_2byte_h(a, b));
     }
-    return (*latin).test(utf_2byte_h(a, b));
+    return false;
   }
   inline bool test(byte a, byte b, byte c) const {
-    if (bmp == nullptr) {
-      return false;
+    if (bmp) {
+      return (*bmp).test(utf_3byte_h(a, b, c));
     }
-    return (*bmp).test(utf_3byte_h(a, b, c));
+    return false;
   }
   inline bool test(byte a, byte b, byte c, byte d) const {
-    if (others == nullptr) {
-      return false;
+    if (others) {
+      uint16_t idx = ((static_cast<uint16_t>(a & 7)) << 6) + (b & 31);
+      if (others[idx]) {
+        uint16_t mapidx = (static_cast<uint16_t>(c & 31) << 6) + (d & 31);
+        return (*others[idx]).test(mapidx);
+      }
     }
-    uint16_t idx = ((static_cast<uint16_t>(a & 7)) << 6) + (b & 31);
-    if (others[idx] == nullptr) {
-      return false;
-    }
-    uint16_t mapidx = (static_cast<uint16_t>(c & 31) << 6) + (d & 31);
-    return (*others[idx]).test(mapidx);
+    return false;
   }
   inline bool test_4byte(uint32_t bytes) const {
     byte a = bytes >> 24;
@@ -628,6 +834,17 @@ struct utf8_bitmap {
           }
         }
       }
+      bool empty = true;
+      for (auto i = 0; i < 512; ++i) {
+        if (others[i]) {
+          empty = false;
+          break;
+        }
+      }
+      if (empty) {
+        delete[] others;
+        others = nullptr;
+      }
     }
   }
 
@@ -714,7 +931,7 @@ struct utf8_bitmap {
   inline utf8_bitmap(const std::string& s)
       : ascii(), latin(nullptr), bmp(nullptr), others(nullptr) {
     for (auto i = 0; i < s.size();) {
-      switch (utf8_bitmap::utf_bytes(s[i])) {
+      switch (utf_bytes(s[i])) {
         default:
           insert(s[i]);
           ++i;
@@ -812,7 +1029,6 @@ struct utf8_bitmap {
     }
     return *this;
   }
-
   inline utf8_bitmap(utf8_bitmap&& other)
       : latin(nullptr), bmp(nullptr), others(nullptr) {
     // ADL
@@ -832,7 +1048,10 @@ struct utf8_bitmap {
   }
   inline friend void swap(utf8_bitmap& a, utf8_bitmap& b) {
     using namespace std;
-    swap(a.ascii, b.ascii);
+    bitmap<256> tmp;
+    tmp = a.ascii;
+    a.ascii = b.ascii;
+    b.ascii = tmp;
     swap(a.latin, b.latin);
     swap(a.bmp, b.bmp);
     swap(a.others, b.others);
@@ -962,23 +1181,502 @@ struct utf8_bitmap {
   bitmap<4096>** others = nullptr;
 };
 
+// utf8 codepoint to pointer map
 template <typename T>
-struct utf8_map {
-  
-  
-  protected:
+struct utf8_ptrmap {
+  inline const T* operator()(byte a) const { return ascii[a]; }
+  inline const T* operator()(byte a, byte b) const {
+    if (latin) {
+      return (latin[utf_2byte_h(a, b)]);
+    }
+    return nullptr;
+  }
+  inline const T* operator()(byte a, byte b, byte c) const {
+    if (bmp) {
+      uint16_t idx = utf_3byte_h(a, b, c);
+      uint16_t x = idx >> 11;
+      uint16_t y = idx & 2047;
+      return (bmp[x][y]);
+    }
+
+    return nullptr;
+  }
+  inline const T* operator()(byte a, byte b, byte c, byte d) const {
+    if (others) {
+      uint32_t idx = utf_4byte_h(a, b, c, d);
+      uint32_t x = idx >> 11;
+      uint32_t y = idx & 2047;
+      return (others[x][y]);
+    }
+    return nullptr;
+  }
+
+  inline T* operator()(byte a) { return ascii[a]; }
+  inline T* operator()(byte a, byte b) {
+    if (latin) {
+      return (latin[utf_2byte_h(a, b)]);
+    }
+    return nullptr;
+  }
+  inline T* operator()(byte a, byte b, byte c) {
+    if (bmp) {
+      uint16_t idx = utf_3byte_h(a, b, c);
+      uint16_t x = idx >> 11;
+      uint16_t y = idx & 2047;
+      return (bmp[x][y]);
+    }
+
+    return nullptr;
+  }
+  inline T* operator()(byte a, byte b, byte c, byte d) {
+    if (others) {
+      uint32_t idx = utf_4byte_h(a, b, c, d);
+      uint32_t x = idx >> 11;
+      uint32_t y = idx & 2047;
+      return (others[x][y]);
+    }
+    return nullptr;
+  }
+
+  inline const T* get_4byte(uint32_t bytes) const {
+    byte a = bytes >> 24;
+    switch (utf_bytes(a)) {
+      default:
+        [[likely]] return this->operator()(a);
+        {
+          case 2:
+            byte b = bytes >> 16;
+            return this->operator()(a, b);
+        }
+        {
+          case 3:
+            byte b = bytes >> 16;
+            byte c = bytes >> 8;
+            return this->operator()(a, b, c);
+        }
+        {
+          case 4:
+            byte b = bytes >> 16;
+            byte c = bytes >> 8;
+            return this->operator()(a, b, c, bytes);
+        }
+    }
+  }
+  // order of bytes reversed
+  inline const T* get_rev4byte(uint32_t bytes) const {
+    byte a = bytes;
+    switch (utf_bytes(a)) {
+      default:
+        [[likely]] return this->operator()(a);
+        {
+          case 2:
+            byte b = bytes >> 8;
+            this->operator()(a, b);
+        }
+        {
+          case 3:
+            byte b = bytes >> 8;
+            byte c = bytes >> 16;
+            return this->operator()(a, b, c);
+        }
+        {
+          case 4:
+            byte b = bytes >> 8;
+            byte c = bytes >> 16;
+            byte d = bytes >> 24;
+            return this->operator()(a, b, c, bytes);
+        }
+    }
+  }
+
+  inline T* set_4byte(uint32_t bytes) {
+    byte a = bytes >> 24;
+    switch (utf_bytes(a)) {
+      default:
+        [[likely]] return this->operator()(a);
+        {
+          case 2:
+            byte b = bytes >> 16;
+            return this->operator()(a, b);
+        }
+        {
+          case 3:
+            byte b = bytes >> 16;
+            byte c = bytes >> 8;
+            return this->operator()(a, b, c);
+        }
+        {
+          case 4:
+            byte b = bytes >> 16;
+            byte c = bytes >> 8;
+            return this->operator()(a, b, c, bytes);
+        }
+    }
+  }
+  // order of bytes reversed
+  inline T* set_rev4byte(uint32_t bytes) {
+    byte a = bytes;
+    switch (utf_bytes(a)) {
+      default:
+        [[likely]] return this->operator()(a);
+        {
+          case 2:
+            byte b = bytes >> 8;
+            this->operator()(a, b);
+        }
+        {
+          case 3:
+            byte b = bytes >> 8;
+            byte c = bytes >> 16;
+            return this->operator()(a, b, c);
+        }
+        {
+          case 4:
+            byte b = bytes >> 8;
+            byte c = bytes >> 16;
+            byte d = bytes >> 24;
+            return this->operator()(a, b, c, bytes);
+        }
+    }
+  }
+
+  inline void add_element(byte a, T* ptr = nullptr) { ascii[a] = ptr; }
+  inline void add_element(byte a, byte b, T* ptr = nullptr) {
+    if (latin) {
+    } else {
+      latin = new T*[2048]{nullptr};
+    }
+    latin[utf_2byte_h(a, b)] = ptr;
+  }
+  inline void add_element(byte a, byte b, byte c, T* ptr = nullptr) {
+    if (bmp) {
+    } else {
+      bmp = new T**[32]{nullptr};
+    }
+    uint16_t idx = utf_3byte_h(a, b, c);
+    uint16_t x = idx >> 11;
+    uint16_t y = idx & 2047;
+    if (bmp[x]) {
+    } else {
+      bmp[x] = new T*[2048];
+    }
+    bmp[x][y] = ptr;
+  }
+  inline void add_element(byte a, byte b, byte c, byte d, T* ptr) {
+    if (others) {
+    } else {
+      others = new T**[1024]{nullptr};
+    }
+    uint32_t idx = utf_4byte_h(a, b, c, d);
+    uint32_t x = idx >> 11;
+    uint32_t y = idx & 2047;
+    if (others[x]) {
+    } else {
+      others[x] = new T*[2048]{nullptr};
+    }
+    others[x][y] = ptr;
+  }
+  inline void add_4byte_el(uint32_t bytes, T* ptr = nullptr) {
+    byte a = bytes >> 24;
+    switch (utf_bytes(a)) {
+      default:
+        [[likely]] add_element(a, ptr);
+        return;
+        {
+          case 2:
+            byte b = bytes >> 16;
+            add_element(a, b, ptr);
+            return;
+        }
+        {
+          case 3:
+            byte b = bytes >> 16;
+            byte c = bytes >> 8;
+            add_element(a, b, c, ptr);
+            return;
+        }
+        {
+          case 4:
+            byte b = bytes >> 16;
+            byte c = bytes >> 8;
+            add_element(a, b, c, bytes, ptr);
+            return;
+        }
+    }
+  }
+  inline void add_rev4byte_el(uint32_t bytes, T* ptr = nullptr) {
+    byte a = bytes;
+    switch (utf_bytes(a)) {
+      default:
+        [[likely]] add_element(a, ptr);
+        return;
+        {
+          case 2:
+            byte b = bytes >> 8;
+            add_element(a, b, ptr);
+            return;
+        }
+        {
+          case 3:
+            byte b = bytes >> 8;
+            byte c = bytes >> 16;
+            add_element(a, b, c, ptr);
+            return;
+        }
+        {
+          case 4:
+            byte b = bytes >> 8;
+            byte c = bytes >> 16;
+            byte d = bytes >> 24;
+            add_element(a, b, c, d, ptr);
+            return;
+        }
+    }
+  }
+
+  inline void shrink_to_fit() {
+    if (latin) {
+      bool empty = true;
+      for (auto i = 0; i < 2048; ++i) {
+        if ((*latin)[i]) {
+          empty = false;
+          break;
+        }
+      }
+      if (empty) {
+        delete[] latin;
+        latin = nullptr;
+      }
+    }
+    if (bmp) {
+      for (auto i = 0; i < 32; ++i) {
+        bool empty = true;
+        for (auto j = 0; j < 2048; ++j) {
+          if (bmp[i][j]) {
+            empty = false;
+            break;
+          }
+        }
+        if (empty) {
+          delete[] bmp[i];
+          bmp[i] = nullptr;
+        }
+      }
+      bool empty = true;
+      for (auto i = 0; i < 32; ++i) {
+        if (bmp[i]) {
+          empty = false;
+          break;
+        }
+      }
+      if (empty) {
+        delete[] bmp;
+      }
+    }
+    if (others) {
+      for (auto i = 0; i < 1024; ++i) {
+        bool empty = true;
+        for (auto j = 0; j < 2048; ++j) {
+          if (others[i][j]) {
+            empty = false;
+            break;
+          }
+        }
+        if (empty) {
+          delete[] others[i];
+          others[i] = nullptr;
+        }
+      }
+      bool empty = true;
+      for (auto i = 0; i < 1024; ++i) {
+        if (others[i]) {
+          empty = false;
+          break;
+        }
+      }
+      if (empty) {
+        delete[] others;
+      }
+    }
+  }
+
+  inline utf8_ptrmap()
+      : ascii(), latin(nullptr), bmp(nullptr), others(nullptr) {}
+  inline utf8_ptrmap(const utf8_ptrmap& other)
+      : ascii(),
+        latin(other.latin ? new T*[2048]{nullptr} : nullptr),
+        bmp(other.bmp ? new T**[32]{nullptr} : nullptr),
+        others(other.others ? new T**[1024]{nullptr} : nullptr) {
+    std::memcpy(&ascii[0], &other.ascii[0], sizeof(T* [256]));
+    if (latin) {
+      std::memcpy(latin, other.latin, sizeof(T* [2048]));
+    }
+    if (bmp) {
+      for (auto i = 0; i < 32; ++i) {
+        if (other.bmp[i]) {
+          bmp[i] = new T*[2048]{nullptr};
+          std::memcpy(bmp[i], other.bmp[i], sizeof(T* [2048]));
+        }
+      }
+    }
+    if (others) {
+      for (auto i = 0; i < 1024; ++i) {
+        if (other.others[i]) {
+          others[i] = new T*[2048]{nullptr};
+          std::memcpy(others[i], other.others[i], sizeof(T* [2048]));
+        }
+      }
+    }
+  }
+  inline utf8_ptrmap& operator=(const utf8_ptrmap& other) {
+    std::memcpy(&ascii[0], &other.ascii[0], sizeof(T* [256]));
+    if (latin) {
+      if (other.latin) {
+        std::memcpy(latin, other.latin, sizeof(T* [2048]));
+      } else {
+        delete[] latin;
+        latin = nullptr;
+      }
+    } else if (other.latin) {
+      latin = new T*[2048]{nullptr};
+      std::memcpy(latin, other.latin, sizeof(T* [2048]));
+    }
+    if (bmp) {
+      if (other.bmp) {
+        for (auto i = 0; i < 32; ++i) {
+          if (bmp[i]) {
+            if (other.bmp[i]) {
+              std::memcpy(bmp[i], other.bmp[i], sizeof(T* [2048]));
+            } else {
+              delete[] bmp[i];
+              bmp[i] = nullptr;
+            }
+          } else if (other.bmp[i]) {
+            bmp[i] = new T*[2048];
+            std::memcpy(bmp[i], other.bmp[i], sizeof(T* [2048]));
+          }
+        }
+      } else {
+        for (auto i = 0; i < 32; ++i) {
+          if (bmp[i]) {
+            delete[] bmp[i];
+            bmp[i] = nullptr;
+          }
+        }
+        delete[] bmp;
+        bmp = nullptr;
+      }
+    } else if (other.bmp) {
+      bmp = new T**[32]{nullptr};
+      for (auto i = 0; i < 32; ++i) {
+        if (other.bmp[i]) {
+          bmp[i] = new T*[2048];
+          std::memcpy(bmp[i], other.bmp[i], sizeof(T* [2048]));
+        }
+      }
+    }
+    if (others) {
+      if (other.others) {
+        for (auto i = 0; i < 1024; ++i) {
+          if (others[i]) {
+            if (other.others[i]) {
+              std::memcpy(others[i], other.others[i], sizeof(T* [2048]));
+            } else {
+              delete[] others[i];
+              others[i] = nullptr;
+            }
+          } else if (other.others[i]) {
+            others[i] = new T*[2048];
+            std::memcpy(others[i], other.others[i], sizeof(T* [2048]));
+          }
+        }
+      } else {
+        for (auto i = 0; i < 1024; ++i) {
+          if (others[i]) {
+            delete[] others[i];
+            others[i] = nullptr;
+          }
+        }
+        delete[] others;
+        others = nullptr;
+      }
+    } else if (other.others) {
+      others = new T**[1024]{nullptr};
+      for (auto i = 0; i < 1024; ++i) {
+        if (other.others[i]) {
+          others[i] = new T*[2048];
+          std::memcpy(others[i], other.others[i], sizeof(T* [2048]));
+        }
+      }
+    }
+    return *this;
+  }
+
+  inline utf8_ptrmap(utf8_ptrmap&& other)
+      : ascii(), latin(nullptr), bmp(nullptr), others(nullptr) {
+    // ADL
+    std::memcpy(&ascii[0], &other.ascii[0], sizeof(T* [256]));
+    using namespace std;
+    swap(latin, other.latin);
+    swap(bmp, other.bmp);
+    swap(others, other.others);
+  }
+  inline utf8_ptrmap& operator=(utf8_ptrmap&& other) {
+    std::memcpy(&ascii[0], &other.ascii[0], sizeof(T* [256]));
+    using namespace std;
+    swap(latin, other.latin);
+    swap(bmp, other.bmp);
+    swap(others, other.others);
+    return *this;
+  }
+  inline friend void swap(utf8_ptrmap& a, utf8_ptrmap& b) {
+    T* tmp[256];
+    std::memcpy(&tmp[0], &a.ascii[0], sizeof(T* [256]));
+    std::memcpy(&a.ascii[0], &b.ascii[0], sizeof(T* [256]));
+    std::memcpy(&b.ascii[0], &tmp[0], sizeof(T* [256]));
+    using namespace std;
+    swap(a.latin, b.latin);
+    swap(a.bmp, b.bmp);
+    swap(a.others, b.others);
+  }
+
+  ~utf8_ptrmap() {
+    if (latin) {
+      delete[] latin;
+    }
+    if (bmp) {
+      for (auto i = 0; i < 32; i++) {
+        if (bmp[i]) {
+          delete[] bmp[i];
+        }
+      }
+      delete[] bmp;
+    }
+    if (others) {
+      for (auto i = 0; i < 1024; i++) {
+        if (others[i]) {
+          delete[] others[i];
+        }
+      }
+      delete[] others;
+    }
+  }
+
+ protected:
   T* ascii[256];
-  T* (*latin)[2048];            // pointer to 2048 pointer array
-  T* (*(*bmp)[2048])[32];       // pointer to 32 array of array pointers to 2048
-                                // pointer array
-  T* (*(*others)[2048])[1024];  // pointer to 1024 array of array pointers to
-                                // 2048 pointer array
+  T** latin = nullptr;    // pointer to 2048 pointer array
+  T*** bmp = nullptr;     // pointer to array 32 of pointer to array 2048 of
+                          // pointer to T
+  T*** others = nullptr;  // pointer to array 1024 of pointer to
+
+  // array 2048 of pointer to T
 };
 
 // idx is left at end of code point (not past the end)
+// defautl order is byte 4 byte 3 byte 2 byte 1 (reverse)
 uint32_t get_utf8_n_inc(const std::string& str, uint32_t& idx) {
   uint32_t utf8_char = static_cast<byte>(str[idx]);
-  switch (utf8_bitmap::utf_bytes(str[idx])) {
+  switch (utf_bytes(str[idx])) {
     default:
       break;
     case 2:
@@ -1027,7 +1725,7 @@ std::string uint32_revto_utf8(uint32_t code_point) {
   byte b, c, d;
   std::string ch = "";
   ch += a;
-  switch (utf8_bitmap::utf_bytes(a)) {
+  switch (utf_bytes(a)) {
     default:
       break;
     case 2:
@@ -1095,7 +1793,7 @@ utf8_bitmap char_class(const std::string& s, uint32_t st, uint32_t& ret_end) {
         }
         break;
       default:
-        switch (utf8_bitmap::utf_bytes(next_char)) {
+        switch (utf_bytes(next_char)) {
           default:
             ret.insert(next_char);
             ++st;
@@ -1198,9 +1896,253 @@ struct nfa_vm {
   };
 
   struct cache_element {
+    void addop(op* nxtop) {}
+    void resolve_op(std::vector<thread>& pool, thread t, uint32_t i) {}
+    void dfa_states() {}
+    cache_element* step(const std::string& s, uint32_t i) {
+      uint32_t i_c = i;
+      uint32_t utf8 = get_utf8_n_inc(s, i_c);
+      if (filter.test_rev4byte(utf8)) {
+        return next_state.set_rev4byte(utf8);
+      }
+      return next_state(255);
+    }
+    const cache_element* step(std::string& s, uint32_t i) const {
+      uint32_t utf8 = get_utf8_n_inc(s, i);
+      if (filter.test_rev4byte(utf8)) {
+        return next_state.get_rev4byte(utf8);
+      }
+      return next_state(255);
+    }
+
+    static void resolve_split(hybrid_set& list, op* nxt, op* vec_start,
+                              utf8_bitmap& filter,
+                              std::vector<utf8_bitmap>& classes) {
+      std::vector<op*> resolve_list;
+      resolve_list.reserve(8);  // picked a magic number 64 bytes
+      resolve_list.emplace_back(nxt);
+      do {
+        if (list.test(resolve_list.back() - vec_start)) {
+          resolve_list.pop_back();
+          continue;
+        }
+        list.insert(resolve_list.back() - vec_start);
+        auto& op = *resolve_list.back();
+        if (op.opt == op::optype::SPLIT) {
+          resolve_list.emplace_back(op.lb);
+          resolve_list.emplace_back(op.rb);
+        } else {
+          if (op.opt == op::optype::CHAR) {
+            filter.insert_rev4byte(op.data);
+          } else if (op.opt == op::optype::SPLIT) {
+            filter |= classes[op.data];
+          }
+          resolve_list.pop_back();
+        }
+
+      } while (resolve_list.size());
+    }
+    static void resolve_split(hybrid_set& list, op* nxt, op* vec_start) {
+      std::vector<op*> resolve_list;
+      resolve_list.reserve(8);  // picked a magic number 64 bytes
+      resolve_list.emplace_back(nxt);
+      do {
+        if (list.test(resolve_list.back() - vec_start)) {
+          resolve_list.pop_back();
+          continue;
+        }
+        list.insert(resolve_list.back() - vec_start);
+        auto& op = *resolve_list.back();
+        if (op.opt == op::optype::SPLIT) {
+          resolve_list.emplace_back(op.lb);
+          resolve_list.emplace_back(op.rb);
+        } else {
+          resolve_list.pop_back();
+        }
+      } while (resolve_list.size());
+    }
+    cache_element construct_next(uint32_t utf8, std::vector<op>& oplist,
+                                 std::vector<utf8_bitmap>& classes) {
+      cache_element new_ce{};
+      new_ce.ops.set_range(oplist.size());
+      for (uint32_t j = 0; j < ops.size(); ++j) {
+        auto& op = oplist[ops[j]];
+        switch (op.opt) {
+          default:
+            continue;
+          case op::optype::CHAR:
+            if (utf8 == op.data) {
+              resolve_split(new_ce.ops, op.lb, oplist.data(), new_ce.filter,
+                            classes);
+            }
+            break;
+          case op::optype::CLASS:
+            if (classes[op.data].test_rev4byte(utf8)) {
+            } else {
+              break;
+            }
+          case op::optype::ANY:
+            resolve_split(new_ce.ops, op.lb, oplist.data(), new_ce.filter,
+                          classes);
+            break;
+          case op::optype::MATCH:
+            ///??? idk ignore it?
+            break;
+        }
+      }
+      return new_ce;
+    }
+    friend void swap(cache_element a, cache_element b) {
+      using namespace std;
+      swap(a.filter, b.filter);
+      swap(a.next_state, b.next_state);
+      swap(a.ops, b.ops);
+    }
     utf8_bitmap filter;
-    utf8_map<cache_element*> next_state;
-    std::vector<op> ops;
+    utf8_ptrmap<cache_element>
+        next_state;  // use element at position 255 for everything not in filter
+                     // (usually nullptr unless wildcard)
+    hybrid_set ops;  // point to all the operations? incase we need to walk and
+                     // generate the next state its bitvector should also be the
+                     // key / tag of a cached_state
+  };
+  // note cache snaps to next power of two size
+  struct cache {
+    cache_element& operator[](uint32_t idx) {
+      return ring_buffer[(idx + start) & (size_less1)];
+    }
+    const cache_element& operator[](uint32_t idx) const {
+      return ring_buffer[(idx + start) & (size_less1)];
+    }
+    void pop() {
+      tree.erase(tree.find(this->operator[](0).ops));
+      start += 1;
+      start = start & size_less1;
+    }
+    void reset() {
+      start = 0;
+      end = 0;
+      tree.clear();
+    }
+    void push(cache_element& c) {
+      if (((end + 1) & size_less1) == start) {
+        pop();
+        overflow_c += 1;
+        if (overflow_c == overflow_lim) {
+          reset();
+          rebuild_c += 1;
+        }
+      }
+      tree.insert({c.ops, end});
+      ring_buffer[end] = c;
+      end += 1;
+      end = end & size_less1;
+    }
+    void push(cache_element&& c) {
+      if ((end + 1) == start) {
+        pop();
+        overflow_c += 1;
+        if (overflow_c == overflow_lim) {
+          reset();
+          rebuild_c += 1;
+        }
+      }
+      tree.insert({c.ops, end});
+      ring_buffer[end] = c;
+      end += 1;
+      end = end & size_less1;
+    }
+    // this also resets the cache!
+    void resize(uint32_t n) {
+      uint32_t log2_next_2pow = 32 - countl_zero(n + 1) - 1;
+      uint32_t new_size = 1 << log2_next_2pow;
+      ring_buffer.reserve(new_size);
+      ring_buffer.resize(new_size);
+      size_less1 = new_size - 1;
+      start = 0;
+      end = 0;
+      tree.clear();
+    }
+    bool test(const hybrid_set& rep) { return tree.count(rep); }
+    cache_element& operator()(const hybrid_set& rep) {
+      return this->operator[](tree.find(rep)->second);
+    }
+    template <bool Unanchored>
+    bool run(const std::string& s, uint32_t& i, std::vector<op>& oplist,
+             uint32_t st_op, std::vector<utf8_bitmap>& classes, int64_t& last) {
+      auto& current_cel = strt;  // ensure first element has been pushed
+      if (current_cel.ops.test(oplist.size() - 1)) {
+        return true;
+      }
+      for (uint32_t idx = i; idx < s.size();) {
+        cache_element* nxt = current_cel.step(s, idx);
+        if (nxt) {
+          current_cel = *nxt;
+        } else {
+          if (rebuild_lim == rebuild_c) {
+            idx += utf_bytes(s[idx]);
+            i = idx;
+            last = &current_cel - &ring_buffer[start];
+            return false;
+          }
+          uint32_t i_c = idx;
+          uint32_t utf8 = get_utf8_n_inc(s, i_c);
+          // this should be checking the cache to see if it is there and tying
+          // things up
+          auto tmp = current_cel.construct_next(utf8, oplist, classes);
+          if (test(tmp.ops)) {
+            auto pos = &(this->operator()(tmp.ops));
+            if (current_cel.filter.test(utf8)) {
+              current_cel.next_state.add_rev4byte_el(utf8, pos);
+            } else {
+              current_cel.next_state.add_element(255, pos);
+            }
+            current_cel = *pos;
+          } else {
+            push(std::move(tmp));
+            auto pos = &ring_buffer[((end - 1) & size_less1)];
+            if (current_cel.filter.test(utf8)) {
+              current_cel.next_state.add_rev4byte_el(utf8, pos);
+            } else {
+              current_cel.next_state.add_element(255, pos);
+            }
+            current_cel = *pos;
+          }
+        }
+        if (current_cel.ops.test(oplist.size() - 1)) {
+          idx += utf_bytes(s[idx]);
+          i = idx;
+          return true;
+        }
+        if constexpr (Unanchored) {
+          cache_element::resolve_split(current_cel.ops, &oplist[st_op],
+                                       oplist.data(), current_cel.filter,
+                                       classes);
+        }
+        idx += utf_bytes(s[idx]);
+        i = idx;
+      }
+      last = -1;
+      return false;
+    }
+
+    void init_s(std::vector<op>& oplist, uint32_t st_op,
+                std::vector<utf8_bitmap>& classes) {
+      strt = cache_element{};
+      strt.ops.set_range(oplist.size());
+      cache_element::resolve_split(strt.ops, &oplist[st_op], oplist.data(),
+                                   strt.filter, classes);
+    }
+    uint32_t start;
+    uint32_t end;         // start and end track what is initialised
+    uint32_t size_less1;  // power of two size
+    uint32_t overflow_lim = 5;
+    uint32_t rebuild_lim = 5;
+    uint32_t overflow_c = 0;
+    uint32_t rebuild_c = 0;
+    cache_element strt;
+    std::vector<cache_element> ring_buffer;
+    std::map<hybrid_set, uint32_t, hybrid_set_comp> tree;
   };
 
  protected:
@@ -1234,6 +2176,7 @@ struct nfa_vm {
       prog.emplace_back(op(op::optype::ANY, 0, nullptr));
     } else {
       uint32_t utf8_char = get_utf8_n_inc(processed, ret_idx);
+      regex_chars.insert_rev4byte(utf8_char);
       prog.emplace_back(op(op::optype::CHAR, utf8_char, nullptr));
     };
     f_stack.emplace_back(prog.back());
@@ -1262,6 +2205,10 @@ struct nfa_vm {
     tokenised = "";
     tokenised.reserve(regex.size() * 2);
     for (auto i = 0; i < regex.size(); ++i) {
+      // ignore all nulls in a string, what the hell is it doing here
+      if (regex[i] == 0) {
+        continue;
+      }
       if (regex[i] == '[') {
         while (regex[i] != ']') {
           tokenised += regex[i];
@@ -1273,7 +2220,7 @@ struct nfa_vm {
         }
       }
       byte n;
-      switch (utf8_bitmap::utf_bytes(regex[i])) {
+      switch (utf_bytes(regex[i])) {
         default:
           tokenised += regex[i];
           break;
@@ -1385,7 +2332,7 @@ struct nfa_vm {
           pop_stack_presedence(tokenised[i], operator_stack, processed);
           break;
         default:
-          switch (utf8_bitmap::utf_bytes(tokenised[i])) {
+          switch (utf_bytes(tokenised[i])) {
             default:
               processed += tokenised[i];
               break;
@@ -1496,6 +2443,7 @@ struct nfa_vm {
           ++i;
           classes.emplace_back(char_class(processed, i, i));
           prog.emplace_back(op(op::optype::CLASS, class_c, nullptr));
+          regex_chars |= classes[class_c];
           f_stack.emplace_back(prog.back());
           ++class_c;
           break;
@@ -1561,20 +2509,80 @@ struct nfa_vm {
     save_points = lsave;
   }
 
+  void create_prog_ruin() {
+    prog_ruin.reserve(prog.size());
+    std::vector<uint32_t> save_count(prog.size());
+    if (prog[0].opt == op::optype::SAVE) {
+      save_count[0] = 1;
+      auto lp = prog[0].lb;
+      while (lp->opt == op::optype::SAVE) {
+        lp = lp->lb;
+      }
+      prog_ruin_start = lp - prog.data();
+    }
+    for (uint32_t i = 1; i < prog.size(); ++i) {
+      save_count[i] = save_count[i - 1];
+      if (prog[i].opt == op::optype::SAVE) {
+        save_count[i] += 1;
+      }
+    }
+    prog_ruin_start -= save_count[prog_ruin_start];
+    for (uint32_t i = 0; i < prog.size(); ++i) {
+      if (prog[i].opt != op::optype::SAVE) {
+        prog_ruin.emplace_back(prog[i]);
+        if (prog_ruin.back().lb) {
+          auto lp = prog[i].lb;
+          while (lp->opt == op::optype::SAVE) {
+            lp = lp->lb;
+          }
+          prog_ruin.back().lb = prog_ruin.data();
+          prog_ruin.back().lb += lp - prog.data();
+          auto diff_to_s = prog_ruin.back().lb - prog_ruin.data();
+          prog_ruin.back().lb -= save_count[diff_to_s];
+        }
+        if (prog_ruin.back().rb) {
+          auto lp = prog[i].rb;
+          while (lp->opt == op::optype::SAVE) {
+            lp = lp->lb;
+          }
+          prog_ruin.back().rb = prog_ruin.data();
+          prog_ruin.back().rb += lp - prog.data();
+          auto diff_to_s = prog_ruin.back().rb - prog_ruin.data();
+          prog_ruin.back().rb -= save_count[diff_to_s];
+        }
+      }
+    }
+  }
   void clear_compile_info() {
     f_stack.clear();
     prog.clear();
+    prog_ruin.clear();
     classes.clear();
     save_points = 0;
+    prog_ruin_start = 0;
   }
 
  public:
-  nfa_vm(const std::string& regex) {
+  nfa_vm(const std::string& regex)
+      : prog(),
+        classes(),
+        regex_chars(),
+        save_points(),
+        f_stack(),
+        gen_id(),
+        cur(),
+        nxt(),
+        matches() {
     std::string tokens;
     tokenise(regex, tokens);
+    // std::cout << tokens << std::endl;
     std::string notquitepostfix;
     nearly_shunting_yard(tokens, notquitepostfix);
+    // std::cout << notquitepostfix << std::endl;
     compile_nfa_sg(notquitepostfix);
+    create_prog_ruin();
+    mem.resize(32);
+    mem.init_s(prog_ruin, prog_ruin_start, classes);
   }
   nfa_vm() = delete;
   void recompile(const std::string& regex) {
@@ -1584,6 +2592,7 @@ struct nfa_vm {
     std::string notquitepostfix;
     nearly_shunting_yard(tokens, notquitepostfix);
     compile_nfa_sg(notquitepostfix);
+    create_prog_ruin();
   }
   void print_classes() {
     std::cout << "Classes:" << std::endl;
@@ -1592,37 +2601,37 @@ struct nfa_vm {
     }
   }
 
-  void print_prog() {
+  void print_oplist(std::vector<op>& oplist) {
     std::cout << "Printing NFA ops" << std::endl;
     std::cout << "--------------------------------" << std::endl;
-    for (auto i = 0; i < prog.size(); ++i) {
+    for (auto i = 0; i < oplist.size(); ++i) {
       std::string ch = "";
-      switch (prog[i].opt) {
+      switch (oplist[i].opt) {
         case op::optype::CHAR:
-          ch = uint32_revto_utf8(prog[i].data);
+          ch = uint32_revto_utf8(oplist[i].data);
           std::cout << "[" << i << "]\t";
           std::cout << ch;
-          std::cout << "\t\tjmp " << prog[i].lb - prog.data();
+          std::cout << "\t\tjmp " << oplist[i].lb - oplist.data();
           break;
         case op::optype::MATCH:
           std::cout << "[" << i << "]\t" << "match";
           break;
         case op::optype::SPLIT:
           std::cout << "[" << i << "]\t" << "split";
-          std::cout << "\t\t" << prog[i].lb - prog.data() << ", "
-                    << prog[i].rb - prog.data();
+          std::cout << "\t\t" << oplist[i].lb - oplist.data() << ", "
+                    << oplist[i].rb - oplist.data();
           break;
         case op::optype::ANY:
           std::cout << "[" << i << "]\t" << "any";
-          std::cout << "\t\tjmp " << prog[i].lb - prog.data();
+          std::cout << "\t\tjmp " << oplist[i].lb - oplist.data();
           break;
         case op::optype::SAVE:
-          std::cout << "[" << i << "]\t" << "save  " << prog[i].data;
-          std::cout << "\t\tjmp " << prog[i].lb - prog.data();
+          std::cout << "[" << i << "]\t" << "save  " << oplist[i].data;
+          std::cout << "\t\tjmp " << oplist[i].lb - oplist.data();
           break;
         case op::optype::CLASS:
-          std::cout << "[" << i << "]\t" << "class " << prog[i].data;
-          std::cout << "\t\tjmp " << prog[i].lb - prog.data();
+          std::cout << "[" << i << "]\t" << "class " << oplist[i].data;
+          std::cout << "\t\tjmp " << oplist[i].lb - oplist.data();
           break;
       }
       std::cout << std::endl;
@@ -1632,6 +2641,12 @@ struct nfa_vm {
       print_classes();
       std::cout << "--------------------------------" << std::endl;
     }
+  }
+
+  void print_prog() { print_oplist(prog); }
+  void print_prog_ruin() {
+    std::cout << "Starting op: " << prog_ruin_start << std::endl;
+    print_oplist(prog_ruin);
   }
 
   void new_thread(std::vector<thread>& pool, thread t, uint32_t i) {
@@ -1653,11 +2668,94 @@ struct nfa_vm {
     pool.emplace_back(t);
   }
 
+  void new_thread(std::vector<thread>& pool, thread t, uint32_t i,
+                  bitvector& bitvec) {
+    auto& op = *t.ops;
+    if (op.gen == gen_id) {
+      return;
+    }
+    op.gen = gen_id;
+    if (op.opt == op::optype::SPLIT) {
+      new_thread(pool, thread(op.lb, std::move(t.m_loc)), i, bitvec);
+      new_thread(pool, thread(op.rb, std::move(t.m_loc)), i, bitvec);
+      return;
+    }
+    if (op.opt == op::optype::SAVE) {
+      t.m_loc[op.data] = i + 1;
+      new_thread(pool, thread(op.lb, std::move(t.m_loc)), i, bitvec);
+      return;
+    }
+    bitvec.set(t.ops - prog.data());
+    pool.emplace_back(t);
+  }
+
   void clear_match_info() {
     cur.clear();
     nxt.clear();
     matches.clear();
     gen_id = 0;
+  }
+
+  template <bool Unanchored = false>
+  bool test(const std::string& str) {
+    mem.rebuild_c = 0;
+    mem.overflow_c = 0;
+    bool match = false;
+    bool cache = true;
+    hybrid_set current{};
+    hybrid_set next{};
+    for (uint32_t i = 0; i < str.size(); ++i) {
+      if (cache) {
+        int64_t last_c = 0;
+        match = mem.run<Unanchored>(str, i, prog_ruin, prog_ruin_start, classes,
+                                    last_c);
+        if (match) {
+          return match;
+        }
+        if (last_c != -1) {
+          current.set_range(prog_ruin.size());
+          next.set_range(prog_ruin.size());
+          current = mem[last_c].ops;
+        } else {
+          return false;
+        }
+      }
+      uint32_t i_c = i;
+      uint32_t utf8 = get_utf8_n_inc(str, i_c);
+      if constexpr (Unanchored) {
+        cache_element::resolve_split(current, &prog_ruin[prog_ruin_start],
+                                     prog_ruin.data());
+      }
+
+      for (uint32_t j = 0; j < current.size(); ++j) {
+        auto& op = prog_ruin[current[j]];
+        switch (op.opt) {
+          default:
+            continue;
+          case op::optype::CHAR:
+            if (utf8 == op.data) {  // fallthrough
+            } else {
+              break;
+            }
+          case op::optype::CLASS:
+            if (classes[op.data].test_rev4byte(utf8)) {  // fallthrough
+            } else {
+              break;
+            }
+          case op::optype::ANY:
+            cache_element::resolve_split(next, op.lb, prog_ruin.data());
+            break;
+          case op::optype::MATCH:
+            return true;
+        }
+      }
+      {
+        using namespace std;
+        swap(current, next);
+        next.clear();
+      }
+    }
+    return current.test(prog_ruin.size() - 1);
   }
 
   template <bool Unanchored = false, bool Match_one = true>
@@ -1710,7 +2808,7 @@ struct nfa_vm {
           return match;
         }
       }
-      i += utf8_bitmap::utf_bytes(str[i]);
+      i += utf_bytes(str[i]);
     }
     for (uint32_t j = 0; j < cur.size(); ++j) {
       auto& op = *cur[j].ops;
@@ -1768,10 +2866,13 @@ struct nfa_vm {
     matches = std::move(std::vector<std::vector<uint32_t>>(0));
   }
 
- protected:
-  // nfa related
+  // protected:
+  //  nfa related
   std::vector<op> prog;
+  std::vector<op> prog_ruin;  // prog without save op
+  uint32_t prog_ruin_start;   // track where the first instruction should be
   std::vector<utf8_bitmap> classes;
+  utf8_bitmap regex_chars;
   uint32_t save_points = 0;
   // compilation only
   std::vector<nfa_frag> f_stack;
@@ -1779,15 +2880,8 @@ struct nfa_vm {
   uint64_t gen_id = 0;
   std::vector<thread> cur{};
   std::vector<thread> nxt{};
+  cache mem;
   std::vector<std::vector<uint32_t>> matches;
 };
 
 }  // namespace simple_regex
-
-// program length times number of saves
-// cache and determine rejection
-// each other be a pointer to list
-
-// hash on instructions
-
-// what was the shit about sparse sets?
