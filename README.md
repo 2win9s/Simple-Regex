@@ -12,7 +12,7 @@ Character classes are handled with a handrolled bitmap specifically for UTF-8 co
 
 testing.cpp output():
 
-'''
+```
 Regex: f.*l 
 Shakespeare quote 1 test
 ----------------------
@@ -31,6 +31,6 @@ run 1 simple_regex took:        2183 ns to check if match exists, output:0
 run 1 std::regex took:          1433 ns to check if match exists, output:0
 run 2 simple_regex took:        2202 ns to check if match exists, output:0
 run 2 std::regex took:          1420 ns to check if match exists, output:0
-'''
+```
 
-With caching provided the fixed size cache is enough i.e. the regex is small/simple enough after a short warmup it becomes quite good at checking if a 
+With caching provided the fixed size cache is enough i.e. the regex is small/simple enough it seems to behave well for some text after warmup.
