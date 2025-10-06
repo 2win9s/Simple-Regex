@@ -2070,53 +2070,53 @@ struct nfa_vm {
     template <bool Unanchored>
     bool run(const std::string& s, uint32_t& i, std::vector<op>& oplist,
              uint32_t st_op, std::vector<utf8_bitmap>& classes, int64_t& last) {
-      auto& current_cel = strt;  // ensure first element has been pushed
-      if (current_cel.ops.test(oplist.size() - 1)) {
+      cache_element* current_cel = &strt;
+      if ((*current_cel).ops.test(oplist.size() - 1)) {
         return true;
       }
       for (uint32_t idx = i; idx < s.size();) {
-        cache_element* nxt = current_cel.step(s, idx);
+        cache_element* nxt = (*current_cel).step(s, idx);
         if (nxt) {
-          current_cel = *nxt;
+          current_cel = nxt;
         } else {
           if (rebuild_lim == rebuild_c) {
             idx += utf_bytes(s[idx]);
             i = idx;
-            last = &current_cel - &ring_buffer[start];
+            last = current_cel - &ring_buffer[start];
             return false;
           }
           uint32_t i_c = idx;
           uint32_t utf8 = get_utf8_n_inc(s, i_c);
           // this should be checking the cache to see if it is there and tying
           // things up
-          auto tmp = current_cel.construct_next(utf8, oplist, classes);
+          auto tmp = (*current_cel).construct_next(utf8, oplist, classes);
           if (test(tmp.ops)) {
-            auto pos = &(this->operator()(tmp.ops));
-            if (current_cel.filter.test(utf8)) {
-              current_cel.next_state.add_rev4byte_el(utf8, pos);
+            cache_element* pos = &(this->operator()(tmp.ops));
+            if ((*current_cel).filter.test(utf8)) {
+              (*current_cel).next_state.add_rev4byte_el(utf8, pos);
             } else {
-              current_cel.next_state.add_element(255, pos);
+              (*current_cel).next_state.add_element(255, pos);
             }
-            current_cel = *pos;
+            current_cel = pos;
           } else {
             push(std::move(tmp));
             auto pos = &ring_buffer[((end - 1) & size_less1)];
-            if (current_cel.filter.test(utf8)) {
-              current_cel.next_state.add_rev4byte_el(utf8, pos);
+            if ((*current_cel).filter.test(utf8)) {
+              (*current_cel).next_state.add_rev4byte_el(utf8, pos);
             } else {
-              current_cel.next_state.add_element(255, pos);
+              (*current_cel).next_state.add_element(255, pos);
             }
-            current_cel = *pos;
+            current_cel = pos;
           }
         }
-        if (current_cel.ops.test(oplist.size() - 1)) {
+        if ((*current_cel).ops.test(oplist.size() - 1)) {
           idx += utf_bytes(s[idx]);
           i = idx;
           return true;
         }
         if constexpr (Unanchored) {
-          cache_element::resolve_split(current_cel.ops, &oplist[st_op],
-                                       oplist.data(), current_cel.filter,
+          cache_element::resolve_split((*current_cel).ops, &oplist[st_op],
+                                       oplist.data(), (*current_cel).filter,
                                        classes);
         }
         idx += utf_bytes(s[idx]);

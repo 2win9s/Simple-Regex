@@ -73,7 +73,8 @@ int main() {
       "All the world's a stage, And all the men and women merely players; They "
       "have their exits and their entrances; And one man in his time plays "
       "many parts, His acts being seven ages.";
-  std::cout << "Shakespeare quote 1 test" << std::endl;
+  std::cout<<std::endl;
+  std::cout << "Shakespeare quote 2 test" << std::endl;
   std::cout << "----------------------" << std::endl;
   for (auto i = 0; i < 3; i++) {
     auto start = std::chrono::steady_clock::now();
